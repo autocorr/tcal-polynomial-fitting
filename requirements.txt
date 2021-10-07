@@ -1,0 +1,7 @@
+astropy
+casatools
+matplotlib
+numpy
+pandas
+scipy
+scipy
