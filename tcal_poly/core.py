@@ -295,3 +295,35 @@ def plot_all_seds(df):
                 continue
 
 
+def test_plot_light_curve(full_df, outname=None):
+    if outname is None:
+        outname = "3C48_light_curve"
+    field_df = full_df.loc[idx["0137+331=3C48", :, "A", :]]
+    dates = field_df.index.get_level_values("date").unique().sort_values()
+    dates = [
+            d for d in dates if d not in
+            # Bad dates for 3C138
+            #("2021-05-09", "2021-06-15", "2020-02-03", "2018-01-30A",
+            #    "2021-03-08", "2019-07-27")
+            # Bad dates for 3C48
+            ["2020-02-03"]
+    ]
+    light_curve = []
+    #band_freqs = np.log10(np.array([1.5, 3.0, 6.0, 10.0, 15.0, 22.3, 33.3, 45.0]))
+    band_freqs = np.log10(np.array([33.3]))
+    for date in dates:
+        date_df = field_df.loc[idx[:, date, :, :]]
+        poly = SedPoly.from_stokes(date_df, "I")
+        poly.clip_and_refit()
+        fluxes = np.polyval(poly.p_coef, band_freqs)
+        light_curve.append(fluxes)
+    fluxes = np.array(fluxes).T
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.plot(dates, light_curve, drawstyle="steps-mid")
+    ax.set_xticklabels(dates, rotation=90)
+    ax.set_xlabel(r"Execution Block")
+    ax.set_ylabel(r"$I_\nu(\mathcal{I}) \ [\mathrm{Jy}]$")
+    plt.tight_layout()
+    savefig(f"{outname}.pdf")
+
+
