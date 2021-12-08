@@ -3,23 +3,26 @@
 from pathlib import Path
 
 
+FRANK_DIR = Path("/lustre/aoc/sciops/fschinze")
+BRIAN_DIR = Path("/lustre/aoc/sciops/bsvoboda")
+PROJ_DIR  = Path("/lustre/aoc/projects/vlacal")
+
 class ProjPaths:
-    def __init__(self, extern, root, plot, poly):
+    def __init__(self, extern, root, plot, data):
         self.extern = Path(extern)
         self.root = Path(root)
         self.plot = self.root / plot
-        self.poly = self.root / poly
+        self.data = self.root / data
         assert self.extern.exists()
-        for path in (self.plot, self.poly):
-            if not path.exists():
-                path.mkdir()
+        if not self.plot.exists():
+            self.plot.mkdir()
 
 
 PATHS = ProjPaths(
-        "/lustre/aoc/sciops/fschinze/TCAL0009",
-        "/lustre/aoc/sciops/bsvoboda/tcal_poly",
-        "plots",
-        "poly",
+        extern=PROJ_DIR/"TCAL0009",
+        root=BRIAN_DIR/"tcal_poly",
+        plot="plots",
+        data="poly",
 )
 
 
