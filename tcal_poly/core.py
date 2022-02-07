@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 
 import re
-import copy
 from pathlib import Path
 from multiprocessing import Pool
 
 import numpy as np
 import pandas as pd
-from pandas import IndexSlice as idx
-from scipy import optimize
-from matplotlib import pyplot as plt
-from matplotlib.ticker import AutoMinorLocator
 
 from astropy import units as u
 from astropy.time import Time
@@ -19,31 +14,10 @@ from casatools import msmetadata
 from tcal_poly import PATHS
 
 
-# Matplotlib configuration settings
-plt.rc("text", usetex=True)
-plt.rc("font", size=10, family="serif")
-plt.rc("xtick", direction="in", top=True)
-plt.rc("ytick", direction="in", right=True)
-plt.ioff()
-
-CMAP = copy.copy(plt.cm.get_cmap("magma"))
-CMAP.set_bad("0.5", 1.0)
-
-
 STOKES = list("IQUV")
 BANDS = list("LSCXUKAQ")
 MAD_TO_STD = 1.4826
 TEST_FSCALE_LINE = "# Flux density for J2355+4950 in SpW=0 (freq=3.2072e+10 Hz) is: 0.289629 +/- 0.0493206 (SNR = 5.87238, N = 42)"
-
-
-def savefig(outname, dpi=300, relative=True, overwrite=True):
-    outpath = PATHS.plot / outname if relative else Path(outname)
-    if outpath.exists() and not overwrite:
-        print(f"Figure exists, continuing: {outpath}")
-    else:
-        plt.savefig(str(outpath), dpi=dpi)
-        print(f"Figure saved to: {outpath}")
-        plt.close("all")
 
 
 def get_all_execution_dirs():
@@ -100,6 +74,13 @@ def get_mjs_from_ms_path(path, field=None):
     return times.mean()
 
 
+def regularize_name(name):
+    if name == "3C138":
+        return "0521+166=3C138"
+    else:
+        return name
+
+
 class DataFile:
     columns = [
             "freq",
@@ -127,7 +108,7 @@ class DataFile:
         assert filen.exists()
         with filen.open("r") as f:
             line = f.readline().split()
-            self.field = line[2].rstrip(";")
+            self.field = regularize_name(line[2].rstrip(";"))
             self.band = line[4]
         self.date = filen.parent.parent.parent.name
         mjs = get_mjs_from_ms_path(filen, field=self.field)
@@ -192,6 +173,7 @@ class FluxFile:
                 except AttributeError:
                     continue
         df = df.astype({c: d for c, d in zip(self.columns, self.dtypes)})
+        df["field"] = df.field.apply(regularize_name)
         df["band"] = filen.parent.name
         df["date"] = filen.parent.parent.name
         df.set_index(["field", "date", "band", "spw"], inplace=True)
@@ -213,12 +195,27 @@ def aggregate_flux_files(parallel=True, nproc=30):
     return df
 
 
+def with_csv_ext(name):
+    if not name.endswith(".csv"):
+        return f"{name}.csv"
+    else:
+        return name
+
+
 def read_df(filen="survey"):
-    if not filen.endswith(".csv"):
-        filen = f"{filen}.csv"
+    filen = with_csv_ext(filen)
     index_col = ["field", "date", "band", "spw"]
     df = pd.read_csv(PATHS.data/filen, index_col=index_col)
     return df
+
+
+def read_weather(filen="weather"):
+    filen = with_csv_ext(filen)
+    return pd.read_csv(PATHS.data/filen, index_col="date")
+
+
+def get_num_bands(df):
+    return df.index.get_level_values("band").unique().size
 
 
 class SedPoly:
@@ -416,147 +413,5 @@ def fit_sed(df, fit_order=3):
     # put fit polynomials into new DF
     # return coefficients
     return
-
-
-def get_num_bands(df):
-    return df.index.get_level_values("band").unique().size
-
-
-def plot_sed(date_df, field, date, outname=None):
-    df = date_df
-    assert len(df) > 0
-    freq = df.freq.values * u.Hz.to("GHz")
-    log_freq = np.log10(freq)
-    if outname is None:
-        outname = f"{field}_{date}_sed"
-    fig, axes = plt.subplots(nrows=4, ncols=1, sharex=True, figsize=(4, 6))
-    axes[0].set_title(f"{field}; {date}")
-    for stokes, ax in zip(STOKES, axes):
-        poly = SedPoly.from_stokes(df, stokes)
-        poly.clip_and_refit(sigma=5.0)
-        poly.plot_data(ax)
-        poly.plot_poly(ax)
-        ax.set_ylabel(rf"$I_\nu(\mathcal{{ {stokes} }}) \ [\mathrm{{Jy}}]$")
-        ax.yaxis.set_minor_locator(AutoMinorLocator())
-        ax.xaxis.set_minor_locator(AutoMinorLocator())
-    ax.set_xlabel(r"$\log_{10}(f \ [\mathrm{GHz}])$")
-    plt.tight_layout()
-    savefig(f"{outname}.pdf")
-
-
-def plot_relative_i_sed(date_df, field, date, scaled_data=True, outname=None):
-    df = date_df
-    assert len(df) > 0
-    pb = PerleyButler17Poly(field) if not scaled_data else None
-    poly = SedPoly.from_stokes(date_df, "I", pb_poly=pb)
-    poly.clip_and_refit(sigma=5.0)
-    if outname is None:
-        outname = f"{field}_{date}_relative_sed"
-    fig, axes = plt.subplots(ncols=1, nrows=2, sharex=True, figsize=(4, 4.0))
-    axes[0].set_title(f"{field.replace('_', '')}; {date}")
-    # With all/bad points
-    ax = axes[0]
-    poly.plot_poly(ax)
-    poly.plot_data(ax, show_clipped=True)
-    ax.hlines(1, poly.log_freq.min(), poly.log_freq.max(), color="cyan",
-            linestyle="dashed")
-    ax.xaxis.set_minor_locator(AutoMinorLocator())
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.set_ylabel(r"$I_\nu(\mathcal{I}) / I_{\nu;\mathrm{PB17}}$")
-    # Just good points
-    ax = axes[1]
-    poly.plot_poly(ax)
-    poly.plot_data(ax, show_clipped=False)
-    ax.hlines(1, poly.log_freq.min(), poly.log_freq.max(), color="cyan",
-            linestyle="dashed")
-    ax.xaxis.set_minor_locator(AutoMinorLocator())
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.set_ylabel(r"$I_\nu(\mathcal{I}) / I_{\nu;\mathrm{PB17}}$")
-    ax.set_xlabel(r"$\log_{10}(f \ [\mathrm{GHz}])$")
-    plt.tight_layout()
-    savefig(f"{outname}.pdf")
-
-
-def plot_all_seds(full_df, field_names=None, do_abs=True, do_rel=True,
-        abs_kwargs=None, rel_kwargs=None):
-    rel_kwargs = {} if rel_kwargs is None else rel_kwargs
-    abs_kwargs = {} if abs_kwargs is None else abs_kwargs
-    if field_names is None:
-        field_names = full_df.index.get_level_values("field").unique()
-    for field in field_names:
-        field_df = full_df.xs(field, level="field")
-        all_dates = field_df.index.get_level_values("date").unique()
-        for date in all_dates:
-            date_df = field_df.xs(date, level="date")
-            try:
-                if do_abs:
-                    plot_sed(date_df, field, date, **abs_kwargs)
-                if do_rel:
-                    plot_relative_i_sed(date_df, field, date, **rel_kwargs)
-            except np.linalg.LinAlgError:
-                continue
-
-
-def plot_all_seds_rel(full_df):
-    fields = ["0137+331=3C48", "0521+166=3C138", "0542+498=3C147"]
-    plot_all_seds(full_df, field_names=fields, do_abs=False,
-            rel_kwargs=dict(scaled_data=True))
-
-
-def plot_light_curve(full_df, field, band="A", scaled_data=True, outname=None):
-    if outname is None:
-        outname = f"{field}_{band}_light_curve"
-    band_center = {
-            "L": 1.5,
-            "S": 3.0,
-            "C": 6.0,
-            "X": 10.0,
-            "U": 15.0,
-            "K": 22.3,
-            "A": 33.3,
-            "Q": 45.0,
-    }
-    band_freqs = np.log10(np.array([band_center[band]]))
-    pb = PerleyButler17Poly(field) if not scaled_data else None
-    field_df = full_df.xs(field, level="field")
-    try:
-        dates = field_df.xs("A", level="band").index.get_level_values("date").unique()
-    except KeyError:
-        raise ValueError(f"Field does not contain A Band: {field}")
-    dates.sort_values()
-    print(dates)
-    field_df = field_df.loc[idx[dates, :, :]]
-    dates = [
-            d for d in dates if d not in
-            []
-    ]
-    light_curve = []
-    for date in dates:
-        date_df = field_df.xs(date, level="date")
-        poly = SedPoly.from_stokes(date_df, "I", pb_poly=pb)
-        poly.clip_and_refit(sigma=5.0)
-        fluxes = np.polyval(poly.poly_coef, band_freqs)
-        light_curve.append(fluxes)
-    fluxes = np.array(fluxes).T
-    fig, ax = plt.subplots(figsize=(4, 3))
-    ax.plot(dates, light_curve, color="black", drawstyle="steps-mid")
-    ax.hlines(1.0, dates[0], dates[-1], color="cyan", linestyle="dashed",
-            zorder=-1)
-    ax.set_title(f"{field.replace('_', '')}; {band} Band")
-    ax.set_xticklabels(dates, rotation=90)
-    ax.set_xlabel(r"Execution Block")
-    ax.set_ylabel(r"$I_\nu(\mathcal{I}) / I_{\nu;\mathrm{PB17}}$")
-    plt.tight_layout()
-    savefig(f"{outname}.pdf")
-
-
-def plot_all_light_curves(full_df, bands=["U", "A"]):
-    fields = full_df.index.get_level_values("field").unique()
-    for field in fields:
-        for band in bands:
-            try:
-                plot_light_curve(full_df, field, band=band)
-            except ValueError:
-                pass
 
 
